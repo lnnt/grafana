@@ -19,6 +19,7 @@ import (
 	grafanarest "github.com/grafana/grafana/pkg/apiserver/rest"
 	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/log"
+	serverlocksvc "github.com/grafana/grafana/pkg/infra/serverlock"
 	"github.com/grafana/grafana/pkg/registry/apis/dashboard/access"
 	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/apiserver/builder"
@@ -41,6 +42,7 @@ type DashboardsAPIBuilder struct {
 	namespacer              request.NamespaceMapper
 	access                  access.DashboardAccess
 	dashStore               dashboards.Store
+	serverLockService       *serverlocksvc.ServerLockService
 
 	log log.Logger
 }
@@ -54,6 +56,7 @@ func RegisterAPIService(cfg *setting.Cfg, features featuremgmt.FeatureToggles,
 	dashStore dashboards.Store,
 	reg prometheus.Registerer,
 	sql db.DB,
+	serverLockService *serverlocksvc.ServerLockService,
 ) *DashboardsAPIBuilder {
 	if !features.IsEnabledGlobally(featuremgmt.FlagGrafanaAPIServerWithExperimentalAPIs) {
 		return nil // skip registration unless opting into experimental apis
@@ -68,6 +71,7 @@ func RegisterAPIService(cfg *setting.Cfg, features featuremgmt.FeatureToggles,
 		namespacer:              namespacer,
 		access:                  access.NewDashboardAccess(sql, namespacer, dashStore, provisioning),
 		log:                     log.New("grafana-apiserver.dashboards"),
+		serverLockService:       serverLockService,
 	}
 	apiregistration.RegisterAPI(builder)
 	return builder
@@ -150,7 +154,7 @@ func (b *DashboardsAPIBuilder) GetAPIGroupInfo(
 			Namespace: b.namespacer(int64(1)),
 		}
 
-		storage[resourceInfo.StoragePath()], err = dualWriteBuilder(resourceInfo.GroupResource(), legacyStore, store, grafanarest.Mode1, reg, requestInfo, nil)
+		storage[resourceInfo.StoragePath()], err = dualWriteBuilder(resourceInfo.GroupResource(), legacyStore, store, grafanarest.Mode1, reg, requestInfo, b.serverLockService)
 		if err != nil {
 			return nil, err
 		}
