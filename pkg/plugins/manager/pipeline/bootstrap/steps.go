@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"slices"
 
@@ -22,24 +23,25 @@ type DefaultConstructor struct {
 }
 
 // DefaultConstructFunc is the default ConstructFunc used for the Construct step of the Bootstrap stage.
-func DefaultConstructFunc(signatureCalculator plugins.SignatureCalculator, assetPath *assetpath.Service) ConstructFunc {
-	return NewDefaultConstructor(signatureCalculator, assetPath).Construct
+func DefaultConstructFunc(signatureCalculator plugins.SignatureCalculator) ConstructFunc {
+	return NewDefaultConstructor(signatureCalculator).Construct
 }
 
 // DefaultDecorateFuncs are the default DecorateFuncs used for the Decorate step of the Bootstrap stage.
-func DefaultDecorateFuncs(cfg *config.PluginManagementCfg) []DecorateFunc {
+func DefaultDecorateFuncs(cfg *config.PluginManagementCfg, assetPath *assetpath.Service) []DecorateFunc {
 	return []DecorateFunc{
 		AppDefaultNavURLDecorateFunc,
 		TemplateDecorateFunc,
 		AppChildDecorateFunc(),
 		SkipHostEnvVarsDecorateFunc(cfg),
+		ConfigureAssetPaths(assetPath),
 	}
 }
 
 // NewDefaultConstructor returns a new DefaultConstructor.
-func NewDefaultConstructor(signatureCalculator plugins.SignatureCalculator, assetPath *assetpath.Service) *DefaultConstructor {
+func NewDefaultConstructor(signatureCalculator plugins.SignatureCalculator) *DefaultConstructor {
 	return &DefaultConstructor{
-		pluginFactoryFunc:   NewDefaultPluginFactory(assetPath).createPlugin,
+		pluginFactoryFunc:   NewDefaultPluginFactory().createPlugin,
 		signatureCalculator: signatureCalculator,
 		log:                 log.New("plugins.construct"),
 	}
@@ -159,4 +161,50 @@ func SkipHostEnvVarsDecorateFunc(cfg *config.PluginManagementCfg) DecorateFunc {
 		p.SkipHostEnvVars = cfg.Features.SkipHostEnvVarsEnabled && !slices.Contains(cfg.ForwardHostEnvVars, p.ID)
 		return p, nil
 	}
+}
+
+func ConfigureAssetPaths(assetPath *assetpath.Service) DecorateFunc {
+	return func(_ context.Context, p *plugins.Plugin) (*plugins.Plugin, error) {
+		info := assetpath.NewPluginInfo(p.JSONData, p.Class, p.FS)
+		baseURL, err := assetPath.Base(info)
+		if err != nil {
+			return nil, fmt.Errorf("base url: %w", err)
+		}
+		moduleURL, err := assetPath.Module(info)
+		if err != nil {
+			return nil, fmt.Errorf("module url: %w", err)
+		}
+
+		p.BaseURL = baseURL
+		p.Module = moduleURL
+
+		if err = setImages(p, assetPath); err != nil {
+			return nil, err
+		}
+		return p, nil
+	}
+}
+
+func setImages(p *plugins.Plugin, assetPath *assetpath.Service) error {
+	info := assetpath.NewPluginInfo(p.JSONData, p.Class, p.FS)
+	var err error
+	for _, dst := range []*string{&p.Info.Logos.Small, &p.Info.Logos.Large} {
+		if len(*dst) == 0 {
+			*dst = assetPath.DefaultLogoPath(p.Type)
+			continue
+		}
+
+		*dst, err = assetPath.RelativeURL(info, *dst)
+		if err != nil {
+			return fmt.Errorf("logo: %w", err)
+		}
+	}
+	for i := 0; i < len(p.Info.Screenshots); i++ {
+		screenshot := &p.Info.Screenshots[i]
+		screenshot.Path, err = assetPath.RelativeURL(info, screenshot.Path)
+		if err != nil {
+			return fmt.Errorf("screenshot %d relative url: %w", i, err)
+		}
+	}
+	return nil
 }
