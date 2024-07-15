@@ -829,6 +829,38 @@ func (st DBstore) RenameReceiverInNotificationSettings(ctx context.Context, orgI
 	return len(updates), st.UpdateAlertRules(ctx, updates)
 }
 
+func (st DBstore) RenameTimeIntervalInNotificationSettings(ctx context.Context, orgID int64, oldTimeInterval, newTimeInterval string) (int, error) {
+	// fetch entire rules because Update method requires it because it copies rules to version table
+	rules, err := st.ListAlertRules(ctx, &ngmodels.ListAlertRulesQuery{
+		OrgID:            orgID,
+		TimeIntervalName: oldTimeInterval,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(rules) == 0 {
+		return 0, nil
+	}
+
+	updates := make([]ngmodels.UpdateRule, 0, len(rules))
+	for _, rule := range rules {
+		r := ngmodels.CopyRule(rule)
+		for idx := range r.NotificationSettings {
+			for mtIdx := range r.NotificationSettings[idx].MuteTimeIntervals {
+				if r.NotificationSettings[idx].MuteTimeIntervals[mtIdx] == oldTimeInterval {
+					r.NotificationSettings[idx].MuteTimeIntervals[mtIdx] = newTimeInterval
+				}
+			}
+		}
+
+		updates = append(updates, ngmodels.UpdateRule{
+			Existing: rule,
+			New:      *r,
+		})
+	}
+	return len(updates), st.UpdateAlertRules(ctx, updates)
+}
+
 func ruleConstraintViolationToErr(rule ngmodels.AlertRule, err error) error {
 	msg := err.Error()
 	if strings.Contains(msg, "UQE_alert_rule_org_id_namespace_uid_title") || strings.Contains(msg, "alert_rule.org_id, alert_rule.namespace_uid, alert_rule.title") {

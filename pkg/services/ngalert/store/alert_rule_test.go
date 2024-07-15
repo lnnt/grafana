@@ -879,18 +879,16 @@ func TestIntegrationAlertRulesNotificationSettings(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, len(receiveRules), affected)
 
-		expectedUIDs := map[string]struct{}{}
-		for _, rule := range receiveRules {
-			expectedUIDs[rule.UID] = struct{}{}
-		}
+		expected := getKeyMap(receiveRules)
+
 		actual, err := store.ListAlertRules(context.Background(), &models.ListAlertRulesQuery{
 			OrgID:        1,
 			ReceiverName: newName,
 		})
 		require.NoError(t, err)
-		assert.Len(t, actual, len(expectedUIDs))
+		assert.Len(t, actual, len(expected))
 		for _, rule := range actual {
-			assert.Contains(t, expectedUIDs, rule.UID)
+			assert.Contains(t, expected, rule.GetKey())
 		}
 
 		actual, err = store.ListAlertRules(context.Background(), &models.ListAlertRulesQuery{
@@ -899,6 +897,44 @@ func TestIntegrationAlertRulesNotificationSettings(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Empty(t, actual)
+
+		t.Run("should do nothing if no rules that match the filter", func(t *testing.T) {
+			affected, err := store.RenameReceiverInNotificationSettings(context.Background(), 1, receiverName, util.GenerateShortUID())
+			require.NoError(t, err)
+			require.Empty(t, affected)
+		})
+	})
+
+	t.Run("RenameTimeIntervalInNotificationSettings should update all rules that refer to the old time interval", func(t *testing.T) {
+		newName := "new-time-interval"
+		affected, err := store.RenameTimeIntervalInNotificationSettings(context.Background(), 1, timeIntervalName, newName)
+		require.NoError(t, err)
+		require.Equal(t, len(timeIntervalRules), affected)
+
+		expected := getKeyMap(timeIntervalRules)
+
+		actual, err := store.ListAlertRules(context.Background(), &models.ListAlertRulesQuery{
+			OrgID:            1,
+			TimeIntervalName: newName,
+		})
+		require.NoError(t, err)
+		assert.Len(t, actual, len(expected))
+		for _, rule := range actual {
+			assert.Contains(t, expected, rule.GetKey())
+		}
+
+		actual, err = store.ListAlertRules(context.Background(), &models.ListAlertRulesQuery{
+			OrgID:            1,
+			TimeIntervalName: timeIntervalName,
+		})
+		require.NoError(t, err)
+		require.Empty(t, actual)
+
+		t.Run("should do nothing if no rules that match the filter", func(t *testing.T) {
+			affected, err := store.RenameTimeIntervalInNotificationSettings(context.Background(), 1, timeIntervalName, util.GenerateShortUID())
+			require.NoError(t, err)
+			require.Empty(t, affected)
+		})
 	})
 }
 
