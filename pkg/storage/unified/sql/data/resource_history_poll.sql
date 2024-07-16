@@ -8,5 +8,14 @@ SELECT
     {{ .Ident "action" | .Into .Response.Action }}
 
     FROM {{ .Ident "resource_history" }}
-    WHERE {{ .Ident "resource_version" }} > {{ .Arg .SinceResourceVersion }}
+    WHERE 1 = 0
+    {{- range $g, $items := .Since }}
+    {{- range $r, $rv := $items }}
+        OR 
+        ( 
+            "group" = "{{ $g }}" AND "resource" = "{{ $r }}" AND "resource_version" > {{ $rv }} AND 1 = 1
+        )
+    {{- end }}
+    {{- end }}
+    ORDER BY {{ .Ident "resource_version" }} ASC
 ;

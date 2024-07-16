@@ -77,12 +77,20 @@ func TestBackendHappyPath(t *testing.T) {
 	})
 
 	t.Run("PrepareList latest", func(t *testing.T) {
-		resp, err := store.PrepareList(ctx, &resource.ListRequest{})
+		resp, err := store.PrepareList(ctx, &resource.ListRequest{
+			Options: &resource.ListOptions{
+				Key: &resource.ResourceKey{
+					Namespace: "namespace",
+					Group:     "group",
+					Resource:  "resource",
+				},
+			},
+		})
 		assert.NoError(t, err)
 		assert.Len(t, resp.Items, 2)
 		assert.Equal(t, "item2 MODIFIED", string(resp.Items[0].Value))
 		assert.Equal(t, "item3 ADDED", string(resp.Items[1].Value))
-		assert.Equal(t, int64(4), resp.ResourceVersion)
+		assert.Equal(t, int64(5), resp.ResourceVersion)
 	})
 
 	t.Run("Watch events", func(t *testing.T) {

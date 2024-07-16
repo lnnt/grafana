@@ -43,6 +43,7 @@ var (
 	sqlResourceVersionGet    = mustTemplate("resource_version_get.sql")
 	sqlResourceVersionInc    = mustTemplate("resource_version_inc.sql")
 	sqlResourceVersionInsert = mustTemplate("resource_version_insert.sql")
+	sqlResourceVersionList   = mustTemplate("resource_version_list.sql")
 )
 
 // TxOptions.
@@ -104,10 +105,11 @@ func (r *historyPollResponse) Results() (*historyPollResponse, error) {
 	return r, nil
 }
 
+type groupResourceRV map[string]map[string]int64
 type sqlResourceHistoryPollRequest struct {
 	*sqltemplate.SQLTemplate
-	SinceResourceVersion int64
-	Response             *historyPollResponse
+	Since    groupResourceRV
+	Response *historyPollResponse
 }
 
 func (r sqlResourceHistoryPollRequest) Validate() error {
@@ -176,6 +178,11 @@ type resourceVersion struct {
 	ResourceVersion int64
 }
 
+type groupResourceVersion struct {
+	Group, Resource string
+	ResourceVersion int64
+}
+
 func (r *resourceVersion) Results() (*resourceVersion, error) {
 	return r, nil
 }
@@ -187,5 +194,14 @@ type sqlResourceVersionRequest struct {
 }
 
 func (r sqlResourceVersionRequest) Validate() error {
+	return nil // TODO
+}
+
+type sqlResourceVersionListRequest struct {
+	*sqltemplate.SQLTemplate
+	*groupResourceVersion
+}
+
+func (r sqlResourceVersionListRequest) Validate() error {
 	return nil // TODO
 }
