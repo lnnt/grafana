@@ -28,20 +28,23 @@ trigger = {
     ],
 }
 
-def enterprise_downstream_pipeline():
-    environment = {"EDITION": "oss"}
-    steps = [
-        enterprise_downstream_step(ver_mode = "main"),
-    ]
-    deps = [
+def enterprise_downstream_pipeline(
+    trigger=trigger,
+    ver_mode="main",
+    depends_on = [
         "main-build-e2e-publish",
         "main-integration-tests",
     ]
+):
+    environment = {"EDITION": "oss"}
+    steps = [
+        enterprise_downstream_step(ver_mode=ver_mode),
+    ]
     return pipeline(
-        name = "main-trigger-downstream",
+        name = "{}-trigger-downstream".format(ver_mode),
         trigger = trigger,
         services = [],
         steps = steps,
-        depends_on = deps,
+        depends_on = depends_on,
         environment = environment,
     )

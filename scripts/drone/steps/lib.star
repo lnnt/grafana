@@ -172,7 +172,7 @@ def enterprise_downstream_step(ver_mode):
       Drone step.
     """
     repo = "grafana/grafana-enterprise@"
-    if ver_mode == "pr":
+    if ver_mode == "pr" or ver_mode == "rrc":
         repo += "${DRONE_SOURCE_BRANCH}"
     else:
         repo += "main"
