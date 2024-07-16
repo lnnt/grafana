@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -26,7 +27,6 @@ import (
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 
 	"github.com/grafana/grafana/pkg/apimachinery/utils"
 	grafanaregistry "github.com/grafana/grafana/pkg/apiserver/registry/generic"
@@ -254,117 +254,46 @@ func (s *Storage) Delete(
 // If resource version is "0", this interface will get current object at given key
 // and send it in an "ADDED" event, before watch starts.
 func (s *Storage) Watch(ctx context.Context, key string, opts storage.ListOptions) (watch.Interface, error) {
-	p := opts.Predicate
-	listObj := s.newListFunc()
-
-	if ctx.Err() != nil {
-		return &dummyWatch{}, nil
+	k, err := s.getKey(key)
+	if err != nil {
+		return watch.NewEmptyWatch(), nil
 	}
 
-	// Parses to 0 for opts.ResourceVersion == 0
-	requestedRV, err := s.versioner.ParseResourceVersion(opts.ResourceVersion)
+	req, predicate, err := toListRequest(k, opts)
 	if err != nil {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("invalid resource version: %v", err))
+		return watch.NewEmptyWatch(), nil
+	}
+	if req == nil {
+		return watch.NewEmptyWatch(), nil
 	}
 
-	parsedkey, err := s.getKey(key)
+	cmd := &resource.WatchRequest{
+		Since:               req.ResourceVersion,
+		Options:             req.Options,
+		SendInitialEvents:   false,
+		AllowWatchBookmarks: opts.Predicate.AllowWatchBookmarks,
+	}
+	if opts.SendInitialEvents != nil {
+		cmd.SendInitialEvents = *opts.SendInitialEvents
+	}
+
+	client, err := s.store.Watch(ctx, cmd)
 	if err != nil {
+		// if the context was canceled, just return a new empty watch
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) {
+			return watch.NewEmptyWatch(), nil
+		}
 		return nil, err
 	}
-
-	var namespace *string
-	if parsedkey.Namespace != "" {
-		namespace = &parsedkey.Namespace
+	reporter := apierrors.NewClientErrorReporter(500, "WATCH", "")
+	decoder := &streamDecoder{
+		client:    client,
+		newFunc:   s.newFunc,
+		predicate: predicate,
+		codec:     s.codec,
 	}
 
-	if (opts.SendInitialEvents == nil && requestedRV == 0) || (opts.SendInitialEvents != nil && *opts.SendInitialEvents) {
-		if err := s.GetList(ctx, key, opts, listObj); err != nil {
-			return nil, err
-		}
-
-		listAccessor, err := meta.ListAccessor(listObj)
-		if err != nil {
-			klog.Errorf("could not determine new list accessor in watch")
-			return nil, err
-		}
-		// Updated if requesting RV was either "0" or ""
-		maybeUpdatedRV, err := s.versioner.ParseResourceVersion(listAccessor.GetResourceVersion())
-		if err != nil {
-			klog.Errorf("could not determine new list RV in watch")
-			return nil, err
-		}
-
-		jw := s.watchSet.newWatch(ctx, maybeUpdatedRV, p, s.versioner, namespace)
-
-		initEvents := make([]watch.Event, 0)
-		listPtr, err := meta.GetItemsPtr(listObj)
-		if err != nil {
-			return nil, err
-		}
-		v, err := conversion.EnforcePtr(listPtr)
-		if err != nil || v.Kind() != reflect.Slice {
-			return nil, fmt.Errorf("need pointer to slice: %v", err)
-		}
-
-		for i := 0; i < v.Len(); i++ {
-			obj, ok := v.Index(i).Addr().Interface().(runtime.Object)
-			if !ok {
-				return nil, fmt.Errorf("need item to be a runtime.Object: %v", err)
-			}
-
-			initEvents = append(initEvents, watch.Event{
-				Type:   watch.Added,
-				Object: obj.DeepCopyObject(),
-			})
-		}
-
-		if p.AllowWatchBookmarks && len(initEvents) > 0 {
-			listRV, err := s.versioner.ParseResourceVersion(listAccessor.GetResourceVersion())
-			if err != nil {
-				return nil, fmt.Errorf("could not get last init event's revision for bookmark: %v", err)
-			}
-
-			bookmarkEvent := watch.Event{
-				Type:   watch.Bookmark,
-				Object: s.newFunc(),
-			}
-
-			if err := s.versioner.UpdateObject(bookmarkEvent.Object, listRV); err != nil {
-				return nil, err
-			}
-
-			bookmarkObject, err := meta.Accessor(bookmarkEvent.Object)
-			if err != nil {
-				return nil, fmt.Errorf("could not get bookmark object's acccesor: %v", err)
-			}
-			bookmarkObject.SetAnnotations(map[string]string{"k8s.io/initial-events-end": "true"})
-			initEvents = append(initEvents, bookmarkEvent)
-		}
-
-		jw.Start(initEvents...)
-		return jw, nil
-	}
-
-	maybeUpdatedRV := requestedRV
-	if maybeUpdatedRV == 0 {
-		rsp, err := s.store.List(ctx, &resource.ListRequest{
-			Options: &resource.ListOptions{
-				Key: parsedkey,
-			},
-			Limit: 1, // we ignore the results, just look at the RV
-		})
-		if err != nil {
-			return nil, err
-		}
-		maybeUpdatedRV = uint64(rsp.ResourceVersion)
-		if maybeUpdatedRV < 1 {
-			return nil, fmt.Errorf("expecting a non-zero resource version")
-		}
-	}
-	jw := s.watchSet.newWatch(ctx, maybeUpdatedRV, p, s.versioner, namespace)
-
-	jw.Start()
-	return jw, nil
+	return watch.NewStreamWatcher(decoder, reporter), nil
 }
 
 // Get unmarshals object found at key into objPtr. On a not found error, will either
