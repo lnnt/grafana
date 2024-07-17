@@ -74,7 +74,10 @@ type cdkBackend struct {
 
 func (s *cdkBackend) getPath(key *ResourceKey, rv int64) string {
 	var buffer bytes.Buffer
-	buffer.WriteString(s.root)
+	if len(s.root) > 0 {
+		buffer.WriteString(s.root)
+		buffer.WriteString("/")
+	}
 
 	if key.Group == "" {
 		return buffer.String()
@@ -107,6 +110,27 @@ func (s *cdkBackend) getPath(key *ResourceKey, rv int64) string {
 		buffer.WriteString(fmt.Sprintf("/%d.json", rv))
 	}
 	return buffer.String()
+}
+
+func (s *cdkBackend) keyFromPath(path string, key *ResourceKey) {
+	if s.root != "" {
+		path = path[len(s.root)+1:]
+	}
+	parts := strings.Split(path, "/")
+	count := len(parts)
+	key.Group = parts[0]
+	if count < 1 {
+		return
+	}
+	key.Resource = parts[1]
+	if count < 2 {
+		return
+	}
+	key.Namespace = parts[2]
+	if count < 3 {
+		return
+	}
+	key.Name = parts[3]
 }
 
 func (s *cdkBackend) WriteEvent(ctx context.Context, event WriteEvent) (rv int64, err error) {
@@ -214,12 +238,13 @@ func isDeletedMarker(raw []byte) bool {
 	return false
 }
 
-func (s *cdkBackend) PrepareList(ctx context.Context, req *ListRequest) (*ListResponse, error) {
+func (s *cdkBackend) PrepareList(ctx context.Context, req *ListRequest, authz CanViewResource) (*ListResponse, error) {
 	resources, err := buildTree(ctx, s, req.Options.Key)
 	if err != nil {
 		return nil, err
 	}
 
+	key := &ResourceKey{}
 	rsp := &ListResponse{
 		ResourceVersion: s.rv.Load(),
 	}
@@ -230,10 +255,13 @@ func (s *cdkBackend) PrepareList(ctx context.Context, req *ListRequest) (*ListRe
 			return nil, err
 		}
 		if !isDeletedMarker(raw) {
-			rsp.Items = append(rsp.Items, &ResourceWrapper{
-				ResourceVersion: latest.rv,
-				Value:           raw,
-			})
+			s.keyFromPath(latest.key, key)
+			if authz(key) {
+				rsp.Items = append(rsp.Items, &ResourceWrapper{
+					ResourceVersion: latest.rv,
+					Value:           raw,
+				})
+			}
 		}
 	}
 	return rsp, nil

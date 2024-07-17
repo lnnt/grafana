@@ -54,7 +54,7 @@ type StorageBackend interface {
 	// checked against the kubernetes requirements before finally returning
 	// results.  The list options can be used to improve performance
 	// but are the the final answer.
-	PrepareList(context.Context, *ListRequest) (*ListResponse, error)
+	PrepareList(context.Context, *ListRequest, CanViewResource) (*ListResponse, error)
 
 	// Get all events from the store
 	// For HA setups, this will be more events than the local WriteEvent above!
@@ -130,6 +130,7 @@ type server struct {
 	access      WriteAccessHooks
 	lifecycle   LifecycleHooks
 	now         func() int64
+	authz       authzChecker
 
 	// Background watch task -- this has permissions for everything
 	ctx         context.Context
@@ -151,6 +152,9 @@ func (s *server) Init() error {
 				s.initErr = fmt.Errorf("initialize Resource Server: %w", err)
 			}
 		}
+
+		// For now, let anyone see everything
+		s.authz = &yesAuthzChecker{}
 
 		// Start watching for changes
 		if s.initErr == nil {
@@ -258,11 +262,21 @@ func (s *server) Create(ctx context.Context, req *CreateRequest) (*CreateRespons
 	ctx, span := s.tracer.Start(ctx, "storage_server.Create")
 	defer span.End()
 
+	rsp := &CreateResponse{}
+	user, err := identity.GetRequester(ctx)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
+	err = s.authz.CanCreate(ctx, user, req.Key)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
 	if err := s.Init(); err != nil {
 		return nil, err
 	}
 
-	rsp := &CreateResponse{}
 	found, _ := s.backend.Read(ctx, &ReadRequest{Key: req.Key})
 	if found != nil && len(found.Value) > 0 {
 		rsp.Error = &ErrorResult{
@@ -343,11 +357,21 @@ func (s *server) Update(ctx context.Context, req *UpdateRequest) (*UpdateRespons
 	ctx, span := s.tracer.Start(ctx, "storage_server.Update")
 	defer span.End()
 
+	rsp := &UpdateResponse{}
+	user, err := identity.GetRequester(ctx)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
+	err = s.authz.CanCreate(ctx, user, req.Key)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
 	if err := s.Init(); err != nil {
 		return nil, err
 	}
 
-	rsp := &UpdateResponse{}
 	if req.ResourceVersion < 0 {
 		rsp.Error, _ = errToStatus(apierrors.NewBadRequest("update must include the previous version"))
 		return rsp, nil
@@ -400,11 +424,21 @@ func (s *server) Delete(ctx context.Context, req *DeleteRequest) (*DeleteRespons
 	ctx, span := s.tracer.Start(ctx, "storage_server.Delete")
 	defer span.End()
 
+	rsp := &DeleteResponse{}
+	user, err := identity.GetRequester(ctx)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
+	err = s.authz.CanCreate(ctx, user, req.Key)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
 	if err := s.Init(); err != nil {
 		return nil, err
 	}
 
-	rsp := &DeleteResponse{}
 	if req.ResourceVersion < 0 {
 		return nil, apierrors.NewBadRequest("update must include the previous version")
 	}
@@ -461,6 +495,18 @@ func (s *server) Delete(ctx context.Context, req *DeleteRequest) (*DeleteRespons
 }
 
 func (s *server) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
+	rsp := &ReadResponse{}
+	user, err := identity.GetRequester(ctx)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
+	err = s.authz.CanRead(ctx, user, req.Key)
+	if err != nil {
+		rsp.Error, _ = errToStatus(err)
+		return rsp, nil
+	}
+
 	if err := s.Init(); err != nil {
 		return nil, err
 	}
@@ -474,7 +520,7 @@ func (s *server) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, err
 		return &ReadResponse{Error: status}, nil
 	}
 
-	rsp, err := s.backend.Read(ctx, req)
+	rsp, err = s.backend.Read(ctx, req)
 	if err != nil {
 		if rsp == nil {
 			rsp = &ReadResponse{}
@@ -485,13 +531,18 @@ func (s *server) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, err
 }
 
 func (s *server) List(ctx context.Context, req *ListRequest) (*ListResponse, error) {
+	user, err := identity.GetRequester(ctx)
+	if err != nil {
+		return nil, err
+	}
+	checker, err := s.authz.CanList(ctx, user, req.Options.Key)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.Init(); err != nil {
 		return nil, err
 	}
-
-	rsp, err := s.backend.PrepareList(ctx, req)
-	// Status???
-	return rsp, err
+	return s.backend.PrepareList(ctx, req, checker)
 }
 
 func (s *server) initWatcher() error {

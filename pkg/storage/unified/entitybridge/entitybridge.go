@@ -197,12 +197,11 @@ func (b *entityBridge) Read(ctx context.Context, req *resource.ReadRequest) (*re
 }
 
 // List implements ResourceServer.
-func (b *entityBridge) PrepareList(ctx context.Context, req *resource.ListRequest) (*resource.ListResponse, error) {
-	key := req.Options.Key
+func (b *entityBridge) PrepareList(ctx context.Context, req *resource.ListRequest, authz resource.CanViewResource) (*resource.ListResponse, error) {
 	query := &entity.EntityListRequest{
 		NextPageToken: req.NextPageToken,
 		Limit:         req.Limit,
-		Key:           []string{toEntityKey(key)},
+		Key:           []string{toEntityKey(req.Options.Key)},
 		WithBody:      true,
 	}
 
@@ -223,15 +222,22 @@ func (b *entityBridge) PrepareList(ctx context.Context, req *resource.ListReques
 		return nil, err
 	}
 
+	key := &resource.ResourceKey{}
 	rsp := &resource.ListResponse{
 		ResourceVersion: found.ResourceVersion,
 		NextPageToken:   found.NextPageToken,
 	}
 	for _, item := range found.Results {
-		rsp.Items = append(rsp.Items, &resource.ResourceWrapper{
-			ResourceVersion: item.ResourceVersion,
-			Value:           item.Body,
-		})
+		key.Group = item.Group
+		key.Resource = item.Resource
+		key.Namespace = item.Namespace
+		key.Name = item.Name
+		if authz(key) {
+			rsp.Items = append(rsp.Items, &resource.ResourceWrapper{
+				ResourceVersion: item.ResourceVersion,
+				Value:           item.Body,
+			})
+		}
 	}
 	return rsp, nil
 }
