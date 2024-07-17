@@ -128,9 +128,8 @@ func parseQuery(queryContext *backend.QueryDataRequest) ([]*lokiQuery, error) {
 	qs := make([]*lokiQuery, 0, len(queryContext.Queries))
 
 	var headers map[string]string
-
 	// If request coming from Alerting, get all headers that contain rule metadata
-	if queryContext.GetHTTPHeader(models.FromAlertHeaderName) == "true" {
+	if queryContext.Headers[models.FromAlertHeaderName] == "true" {
 		headers = make(map[string]string, len(queryContext.Queries))
 		headers[models.FromAlertHeaderName] = "true"
 		for header, value := range queryContext.Headers {
